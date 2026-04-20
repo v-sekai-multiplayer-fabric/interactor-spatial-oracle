@@ -3,9 +3,8 @@
 --
 -- TreeC.lean — emits the pbvh_tree_* block into predictive_bvh.h.
 --
--- The hand-written predictive_bvh_tree.h scaffold lives at
--- thirdparty/predictive_bvh/predictive_bvh_tree.h and is deleted once this
--- emitted block passes the existing 23-case doctest suite. Algorithm and
+-- The generated header is consumed at
+-- modules/multiplayer_fabric_mmog/predictive_bvh/predictive_bvh.h. Algorithm and
 -- field layout mirror Spatial/Tree.lean verbatim so the proofs there hold
 -- for the code emitted here.
 
