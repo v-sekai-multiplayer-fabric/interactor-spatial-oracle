@@ -71,36 +71,30 @@ theorem r128_max_correct (a b : Int) :
 
 -- ── AABB union ────────────────────────────────────────────────────────────────
 
-/-- Abstract AABB union: per-axis min for lower bounds, max for upper bounds.
-    Models aabb_union() in the adapter. Uses BoundingBox from Types.lean. -/
-def aabbUnion (a b : BoundingBox) : BoundingBox :=
-  { minX := min a.minX b.minX, maxX := max a.maxX b.maxX,
-    minY := min a.minY b.minY, maxY := max a.maxY b.maxY,
-    minZ := min a.minZ b.minZ, maxZ := max a.maxZ b.maxZ }
 
 /-- Union contains both inputs: ∀ axis, result.min ≤ a.min and result.max ≥ a.max. -/
-theorem aabbUnion_contains_left (a b : BoundingBox) :
-    (aabbUnion a b).minX ≤ a.minX ∧ a.maxX ≤ (aabbUnion a b).maxX ∧
-    (aabbUnion a b).minY ≤ a.minY ∧ a.maxY ≤ (aabbUnion a b).maxY ∧
-    (aabbUnion a b).minZ ≤ a.minZ ∧ a.maxZ ≤ (aabbUnion a b).maxZ := by
-  simp only [aabbUnion]
+theorem unionBounds_contains_left (a b : BoundingBox) :
+    (unionBounds a b).minX ≤ a.minX ∧ a.maxX ≤ (unionBounds a b).maxX ∧
+    (unionBounds a b).minY ≤ a.minY ∧ a.maxY ≤ (unionBounds a b).maxY ∧
+    (unionBounds a b).minZ ≤ a.minZ ∧ a.maxZ ≤ (unionBounds a b).maxZ := by
+  simp only [unionBounds]
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩ <;> omega
 
-theorem aabbUnion_contains_right (a b : BoundingBox) :
-    (aabbUnion a b).minX ≤ b.minX ∧ b.maxX ≤ (aabbUnion a b).maxX ∧
-    (aabbUnion a b).minY ≤ b.minY ∧ b.maxY ≤ (aabbUnion a b).maxY ∧
-    (aabbUnion a b).minZ ≤ b.minZ ∧ b.maxZ ≤ (aabbUnion a b).maxZ := by
-  simp only [aabbUnion]
+theorem unionBounds_contains_right (a b : BoundingBox) :
+    (unionBounds a b).minX ≤ b.minX ∧ b.maxX ≤ (unionBounds a b).maxX ∧
+    (unionBounds a b).minY ≤ b.minY ∧ b.maxY ≤ (unionBounds a b).maxY ∧
+    (unionBounds a b).minZ ≤ b.minZ ∧ b.maxZ ≤ (unionBounds a b).maxZ := by
+  simp only [unionBounds]
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩ <;> omega
 
 /-- Union is commutative. -/
-theorem aabbUnion_comm (a b : BoundingBox) : aabbUnion a b = aabbUnion b a := by
-  cases a; cases b; simp only [aabbUnion]; congr 1 <;> omega
+theorem unionBounds_comm (a b : BoundingBox) : unionBounds a b = unionBounds b a := by
+  cases a; cases b; simp only [unionBounds]; congr 1 <;> omega
 
 /-- Union is associative. -/
-theorem aabbUnion_assoc (a b c : BoundingBox) :
-    aabbUnion (aabbUnion a b) c = aabbUnion a (aabbUnion b c) := by
-  cases a; cases b; cases c; simp only [aabbUnion]; congr 1 <;> omega
+theorem unionBounds_assoc (a b c : BoundingBox) :
+    unionBounds (unionBounds a b) c = unionBounds a (unionBounds b c) := by
+  cases a; cases b; cases c; simp only [unionBounds]; congr 1 <;> omega
 
 -- ── AABB overlap ─────────────────────────────────────────────────────────────
 
@@ -140,20 +134,20 @@ theorem aabbOverlaps_of_contains (outer inner : BoundingBox)
   simp only [aabbOverlaps]; omega
 
 /-- Union overlaps both inputs (provided each input is non-degenerate). -/
-theorem aabbUnion_overlaps_left (a b : BoundingBox)
+theorem unionBounds_overlaps_left (a b : BoundingBox)
     (hx : a.minX ≤ a.maxX) (hy : a.minY ≤ a.maxY) (hz : a.minZ ≤ a.maxZ) :
-    aabbOverlaps (aabbUnion a b) a := by
-  simp only [aabbOverlaps, aabbUnion]; omega
+    aabbOverlaps (unionBounds a b) a := by
+  simp only [aabbOverlaps, unionBounds]; omega
 
 -- ── ring_min via union connection ─────────────────────────────────────────────
 
 /-- aabb_union lower bound equals ring_min: equivalent formulations. -/
-theorem aabbUnion_minX_eq_ringMin (a b : BoundingBox) :
-    (aabbUnion a b).minX = ringMin a.minX b.minX (signBit (b.minX - a.minX)) := by
+theorem unionBounds_minX_eq_ringMin (a b : BoundingBox) :
+    (unionBounds a b).minX = ringMin a.minX b.minX (signBit (b.minX - a.minX)) := by
   rw [ringMin_correct]; rfl
 
-theorem aabbUnion_maxX_eq_ringMax (a b : BoundingBox) :
-    (aabbUnion a b).maxX = ringMax a.maxX b.maxX (signBit (b.maxX - a.maxX)) := by
+theorem unionBounds_maxX_eq_ringMax (a b : BoundingBox) :
+    (unionBounds a b).maxX = ringMax a.maxX b.maxX (signBit (b.maxX - a.maxX)) := by
   rw [ringMax_correct]; rfl
 
 end RingOps
