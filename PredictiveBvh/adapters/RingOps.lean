@@ -15,7 +15,7 @@
 -- All proofs work over Int; the R128 claim is that r128_* correctly embeds Int.
 -- The bridge: sign_bit(b - a) = 1 iff b < a (in two's complement).
 
-import PredictiveBVH.Primitives.Types
+import Shared.Types
 
 namespace PredictiveBVH
 namespace RingOps

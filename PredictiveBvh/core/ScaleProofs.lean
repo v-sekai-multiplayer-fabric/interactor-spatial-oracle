@@ -1,7 +1,7 @@
 -- SPDX-License-Identifier: MIT
 -- Copyright (c) 2026-present K. S. Ernest (iFire) Lee
 
-import PredictiveBVH.Primitives.Types
+import Shared.Types
 
 /-- Left-pad a string to width `n` with character `c`. -/
 private def String.leftpad (n : Nat) (c : Char) (s : String) : String :=

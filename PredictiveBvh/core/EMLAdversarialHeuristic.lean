@@ -2,9 +2,9 @@
 -- Copyright (c) 2026-present K. S. Ernest (iFire) Lee
 
 import AmoLean.EGraph.Basic
-import PredictiveBVH.Primitives.Types
-import PredictiveBVH.Formulas.Formula
-import PredictiveBVH.Spatial.ScaleContradictions
+import Shared.Types
+import PredictiveBvh.core.Formula
+import PredictiveBvh.core.ScaleContradictions
 
 /-!
 # EML Adversarial Heuristics

@@ -1,7 +1,7 @@
 -- SPDX-License-Identifier: MIT
 -- Copyright (c) 2026-present K. S. Ernest (iFire) Lee
 
-import PredictiveBVH.Primitives.Types
+import Shared.Types
 
 -- ============================================================================
 -- LOWER BOUND: Ω(N + k) for overlap-adaptive broadphase
