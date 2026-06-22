@@ -3,12 +3,12 @@
 
 import AmoLean.CodeGen
 import AmoLean.EGraph.Saturate
-import PredictiveBVH.Formulas.Formula
-import PredictiveBVH.Codegen.QuinticHermite
-import PredictiveBVH.Codegen.TreeC
-import PredictiveBVH.Spatial.ScaleContradictions
-import PredictiveBVH.Spatial.EMLAdversarialHeuristic
-import PredictiveBVH.Formulas.Resources
+import PredictiveBvh.core.Formula
+import PredictiveBvh.adapters.QuinticHermite
+import PredictiveBvh.adapters.TreeC
+import PredictiveBvh.core.ScaleContradictions
+import PredictiveBvh.core.EMLAdversarialHeuristic
+import PredictiveBvh.core.Resources
 
 -- ============================================================================
 -- AMOLEAN E-GRAPH C CODE GENERATOR

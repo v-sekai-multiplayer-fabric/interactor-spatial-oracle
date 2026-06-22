@@ -18,8 +18,8 @@
 --   3. query_b_soundness       — a leaf found by _b is one whose Hilbert prefix
 --      matches the query's bucket; no leaves with a different prefix are returned.
 
-import PredictiveBVH.Spatial.BucketBound
-import PredictiveBVH.Spatial.HilbertBroadphase
+import PredictiveBvh.core.BucketBound
+import PredictiveBvh.core.HilbertBroadphase
 
 namespace PredictiveBVH
 namespace BucketDir

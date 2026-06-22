@@ -8,8 +8,8 @@
 --   Recovers the AABB of the Hilbert cell identified by the top `prefixDepth`
 --   bits of `code`, expressed in scene-space µm coordinates.
 
-import PredictiveBVH.Primitives.Types
-import PredictiveBVH.Spatial.HilbertBroadphase
+import Shared.Types
+import PredictiveBvh.core.HilbertBroadphase
 
 namespace PredictiveBVH
 namespace HilbertCell
