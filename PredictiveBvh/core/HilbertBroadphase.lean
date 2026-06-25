@@ -126,6 +126,15 @@ def sortByHilbert (ghosts : Array BoundingBox) : Array HilbertEntry :=
   let entries := ghosts.mapIdx fun i b => { id := i, code := hilbertOfBox b scene, ghost := b }
   radixSortEntries entries
 
+/-- Like sortByHilbert but uses caller-supplied scene bounds instead of computing
+    them from the ghosts.  Required for temporal coherence: if bounds are
+    recomputed each tick, a boundary entity moving by 1 unit changes sw and
+    remaps ALL codes — making every group appear dirty.  Fixed bounds isolate
+    code changes to entities that actually moved. -/
+def sortByHilbertFixed (ghosts : Array BoundingBox) (scene : BoundingBox) : Array HilbertEntry :=
+  let entries := ghosts.mapIdx fun i b => { id := i, code := hilbertOfBox b scene, ghost := b }
+  radixSortEntries entries
+
 -- ── Step 3: Adaptive grouping ────────────────────────────────────────────────
 
 private def groupUnion (sorted : Array HilbertEntry) (first last : Nat) : BoundingBox :=
