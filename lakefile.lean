@@ -19,6 +19,11 @@ require «lean-rebac-core» from git
 require «truth_research_zk» from git
   "https://github.com/V-Sekai-fire/truth_research_zk.git" @ "main"
 
+-- Plausible-driven iterative-deepening witness search: used to hill-climb
+-- maximum concurrent players per zone.
+require «plausible-witness-dag» from git
+  "https://github.com/fire/plausible-witness-dag.git" @ "160b94c9c6eed3bb9ebffce919fc6f989dcafba8"
+
 -- The predictive spatial-oracle hexagon (ghost expansion + SAH + broadphase).
 lean_lib PredictiveBvh where
   roots := #[`PredictiveBvh]
@@ -34,4 +39,10 @@ lean_lib Research where
 @[default_target]
 lean_exe «bvh-codegen» where
   root := `PredictiveBvh.adapters.CodeGen
+  supportInterpreter := true
+
+-- Zone concurrency hill-climber: uses plausible-witness-dag to find max
+-- concurrent players per zone within a work budget.
+lean_exe «zone-concurrency-bench» where
+  root := `PredictiveBvh.bench.ZoneConcurrency
   supportInterpreter := true
