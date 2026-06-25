@@ -71,34 +71,46 @@ def hilbertOfBox (b : BoundingBox) (scene : BoundingBox) : Nat :=
   let nz := ((cz - scene.minZ) * 1024 / sd).toNat.min 1023
   hilbert3D nx ny nz
 
--- Merge sort for HilbertEntry by code (O(N log N) instead of O(N²) insertionSort)
-private def mergeSortEntries (arr : Array HilbertEntry) : Array HilbertEntry :=
-  if arr.size ≤ 1 then arr
-  else
-    let mid := arr.size / 2
-    let left  := mergeSortEntries (arr.extract 0 mid)
-    let right := mergeSortEntries (arr.extract mid arr.size)
-    -- merge
-    Id.run do
-      let mut result : Array HilbertEntry := #[]
-      let mut i := 0
-      let mut j := 0
-      while i < left.size && j < right.size do
-        if left[i]!.code ≤ right[j]!.code then
-          result := result.push left[i]!; i := i + 1
-        else
-          result := result.push right[j]!; j := j + 1
-      while i < left.size do
-        result := result.push left[i]!; i := i + 1
-      while j < right.size do
-        result := result.push right[j]!; j := j + 1
-      return result
-termination_by arr.size
+-- LSD radix sort on 30-bit Hilbert codes — O(N).
+-- Per LowerBound.lean: "Radix sort: O(N) — non-comparison, integer arithmetic".
+-- Three passes of counting sort over 10-bit buckets (1024 buckets each).
+-- Each pass: O(N + 1024) = O(N). Total: O(N).
+
+/-- One counting-sort pass over the 10-bit field `(entry.code >>> shift) &&& 0x3FF`. -/
+private def countingSortPass (arr : Array HilbertEntry) (shift : Nat) : Array HilbertEntry :=
+  let B := 1024
+  -- Count occurrences per bucket
+  let counts := arr.foldl (fun (acc : Array Nat) e =>
+    let b := (e.code >>> shift) &&& (B - 1)
+    acc.set! b (acc[b]! + 1)) (Array.replicate B 0)
+  -- Prefix sums → write positions
+  let prefixes := Id.run do
+    let mut pref : Array Nat := Array.replicate B 0
+    let mut total := 0
+    for i in List.range B do
+      let c := counts[i]!
+      pref := pref.set! i total
+      total := total + c
+    return pref
+  -- Scatter into output
+  Id.run do
+    let mut out : Array HilbertEntry := Array.replicate arr.size default
+    let mut pref := prefixes
+    for e in arr do
+      let b := (e.code >>> shift) &&& (B - 1)
+      let idx := pref[b]!
+      out  := out.set!  idx e
+      pref := pref.set! b (idx + 1)
+    return out
+
+/-- Three-pass LSD radix sort: bits 0–9, then 10–19, then 20–29. -/
+private def radixSortEntries (arr : Array HilbertEntry) : Array HilbertEntry :=
+  countingSortPass (countingSortPass (countingSortPass arr 0) 10) 20
 
 def sortByHilbert (ghosts : Array BoundingBox) : Array HilbertEntry :=
   let scene := computeSceneBounds ghosts
   let entries := ghosts.mapIdx fun i b => { id := i, code := hilbertOfBox b scene, ghost := b }
-  mergeSortEntries entries
+  radixSortEntries entries
 
 -- ── Step 3: Adaptive grouping ────────────────────────────────────────────────
 
