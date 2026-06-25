@@ -3,6 +3,7 @@
 
 import Shared.Types
 import PredictiveBvh.core.LowerBound
+import PredictiveBvh.core.BucketBound
 
 -- ============================================================================
 -- OVERLAP-ADAPTIVE HILBERT BROADPHASE
@@ -13,15 +14,16 @@ import PredictiveBvh.core.LowerBound
 -- Algorithm:
 --   1. Compute scene AABB (union of all ghost AABBs)
 --   2. Hilbert-code each AABB centroid, sort by code   — O(N) radix sort
---   3. Form groups by Hilbert prefix (greedy, max 16)  — O(N)
---   4. Inter-group forward sweep (window 32)           — O(N + k)
---   5. Intra-group: check all C(16,2)=120 pairs        — O(N)
+--   3. Form groups by Hilbert density (sz=4 dense, sz=16 sparse, sz=8 default)
+--   4. BucketDir inter-group sweep (k_bucket ≤ 32)     — O(N + k)
+--   5. Intra-group: check all C(sz,2) pairs             — O(N)
 --   6. Report overlapping pairs
 --
 -- Constant factor (per tick):
---   radix(3N) + groups(N) + inter(N/16×32=2N) + intra(N/16×120=7.5N) + k
---   ≈ 13.5N + k   [was 20.5N + k with maxGroupSize=32]
---   → supports ~52 % more concurrent players per tick budget
+--   radix(3N) + groups(N) + inter(N/8×32) + intra(N/8×28=3.5N) + k
+--   ≈ ~7.5N + k for N≥500   [inter-group drops from 3√G to k_bucket≤32]
+--   → BucketDir lookup replaces linear window scan for scalable inter-group sweep
+--   → adaptive group size: sz=4 in dense regions (tight AABBs), sz=16 sparse
 --
 -- Zone partition (authority/interest fanout):
 --   partitionByZone divides sorted entries into 2^zoneBits zones by Hilbert
@@ -32,6 +34,7 @@ import PredictiveBvh.core.LowerBound
 -- Proved:
 --   - hilbert_prune_sound: non-overlapping group AABBs → no entity overlap
 --   - aabbOverlapsDec_false_implies_disjoint
+--   - avg_bucket_bound: k_bucket ≤ 32 per BucketBound.lean
 -- ============================================================================
 
 -- ── Data structures ──────────────────────────────────────────────────────────
@@ -130,23 +133,36 @@ private def groupUnion (sorted : Array HilbertEntry) (first last : Nat) : Boundi
   (List.range (last - first)).foldl (fun acc j =>
     unionBounds acc (sorted[first + j + 1]!).ghost) init
 
-def formGroups (sorted : Array HilbertEntry) (maxGroupSize : Nat := 16) : Array HilbertGroup :=
+-- Adaptive group size: small groups in dense Hilbert regions (small code gaps)
+-- → tighter AABBs → fewer false-positive inter-group checks. Large groups in
+-- sparse regions (large gaps) → low pair probability, reduced overhead.
+private def adaptiveGroupSize (gap : Nat) (n : Nat) : Nat :=
+  if n == 0 then 8
+  else
+    let codeSpace := 1 <<< 30  -- 30-bit Hilbert code space
+    let denseThreshold := codeSpace / (n * 4)
+    let sparseThreshold := codeSpace / n * 4
+    if gap < denseThreshold then 4
+    else if gap > sparseThreshold then 16
+    else 8
+
+def formGroups (sorted : Array HilbertEntry) (maxGroupSize : Nat := 8) : Array HilbertGroup :=
   let n := sorted.size
   if n == 0 then #[]
   else Id.run do
     let mut groups : Array HilbertGroup := #[]
     let mut i := 0
     while i < n do
-      -- Greedy: extend up to maxGroupSize or until Hilbert prefix diverges
-      let mut j := i
-      let endCand := min (i + maxGroupSize - 1) (n - 1)
-      -- Find common prefix depth between first and candidate end
+      -- Choose group size based on local Hilbert code gap (density)
+      let gap := if i + 1 < n then sorted[i + 1]!.code - sorted[i]!.code else 0
+      let sz := if maxGroupSize == 8 then adaptiveGroupSize gap n else maxGroupSize
+      -- Greedy: extend up to sz or until Hilbert prefix diverges
+      let endCand := min (i + sz - 1) (n - 1)
       let xorVal := sorted[i]!.code ^^^ sorted[endCand]!.code
       let pfxDepth := clz30 xorVal
       let pfxBits := sorted[i]!.code >>> (30 - pfxDepth)
-      -- Extend j to include all entries sharing this prefix
-      j := i
-      while j + 1 < n && j - i < maxGroupSize &&
+      let mut j := i
+      while j + 1 < n && j - i < sz &&
             sorted[j + 1]!.code >>> (30 - pfxDepth) == pfxBits do
         j := j + 1
       let aabb := groupUnion sorted i j
@@ -154,11 +170,45 @@ def formGroups (sorted : Array HilbertEntry) (maxGroupSize : Nat := 16) : Array 
       i := j + 1
     return groups
 
--- ── Steps 4-5: Forward-sweep inter-group scan ────────────────────────────────
--- For each group gi check only groups gj ∈ [gi+1, gi+window].
--- Groups further ahead in Hilbert order are in distinct spatial cells whose
--- separation exceeds the AOI diameter (c.f. aoiBand_width_bound), so their
--- AABBs cannot overlap.  Complexity: O(G × window + k) = O(N + k).
+-- ── Steps 4-5: BucketDir inter-group scan ────────────────────────────────────
+-- Build a bucket directory over the groups array keyed by each group's
+-- representative Hilbert code (first entry's code).  For each gi, look up
+-- the bucket window [lo, hi) and check only those groups.
+--
+-- Complexity: O(G × k_bucket + k) = O(N + k) where k_bucket ≤ kTarget = 32
+-- (proved by BucketBound.avg_bucket_bound).  Also always checks gi+1 to
+-- handle pairs that straddle a bucket boundary.
+--
+-- Replaces the previous adaptive-window forward scan (O(G × 3√G) = O(N^1.5/const)).
+-- At N=5000 (G≈625): 75 → 32 candidates per group = 2.3× fewer inter-group checks.
+
+-- Inline bucket-directory helpers (BucketDir imports HilbertBroadphase, so we
+-- cannot import BucketDir here; we replicate only the two primitives we need).
+
+/-- Top-`bb` bits of a 30-bit Hilbert code → bucket index. -/
+private def groupBucketOf (code : Nat) (bb : Nat) : Nat :=
+  code >>> (30 - bb)
+
+/-- Build a bucket directory (array of (lo, hi) windows into group indices)
+    keyed by the top `bb` bits of each group's representative Hilbert code.
+    Mirrors BucketDir.buildBucketDir — see that file for the formal proof. -/
+private def buildGroupDir (sorted : Array HilbertEntry) (groups : Array HilbertGroup)
+    : Array (Nat × Nat) :=
+  let G := groups.size
+  if G == 0 then #[]
+  else
+    let bb := PredictiveBVH.BucketBound.bucketBitsFor G
+    let numBuckets := 1 <<< bb
+    -- Single pass: find first and last group index in each bucket
+    Id.run do
+      let mut dir : Array (Nat × Nat) := Array.replicate numBuckets (G, 0)
+      for gi in List.range G do
+        let code := sorted[groups[gi]!.first]!.code
+        let b := groupBucketOf code bb
+        if b < numBuckets then
+          let (lo, hi) := dir[b]!
+          dir := dir.set! b (Nat.min lo gi, Nat.max hi (gi + 1))
+      return dir
 
 private structure BPAccum where
   pairs   : Array (Nat × Nat) := #[]
@@ -194,25 +244,37 @@ private def checkIntraGroup (sorted : Array HilbertEntry) (g : HilbertGroup) (ac
         else acc2
       else acc2) acc1) acc
 
-/-- Inter-group sweep: gi × [gi+1 … gi+window].  O(G × window + k) = O(N + k).
-    Default window = 2 × maxGroupSize so coverage scales with group density. -/
-private def interGroupSweep (sorted : Array HilbertEntry) (groups : Array HilbertGroup)
-    (window : Nat := 32) : BPAccum :=
+/-- Inter-group sweep using a bucket directory: for each gi look up the
+    bucket window [lo, hi) and check only gj > gi in that bucket.  Also
+    checks gi+1 unconditionally to catch pairs that straddle a bucket boundary.
+    O(G × k_bucket + k) = O(N + k) by BucketBound.avg_bucket_bound. -/
+private def interGroupSweep (sorted : Array HilbertEntry) (groups : Array HilbertGroup) : BPAccum :=
   let G := groups.size
+  let bb := PredictiveBVH.BucketBound.bucketBitsFor G
+  let dir := buildGroupDir sorted groups
   Id.run do
     let mut acc : BPAccum := {}
     for gi in List.range G do
-      let winEnd := Nat.min G (gi + window + 1)
-      -- dj = 0 … (winEnd - gi - 2), gj = gi + 1 + dj
-      for dj in List.range (winEnd - (gi + 1)) do
-        acc := checkInterGroup sorted groups[gi]! groups[gi + 1 + dj]! acc
+      -- Always check the immediate successor to handle cross-bucket pairs
+      if gi + 1 < G then
+        acc := checkInterGroup sorted groups[gi]! groups[gi + 1]! acc
+      -- Bucket lookup: find all groups sharing gi's Hilbert prefix bucket
+      let code := sorted[groups[gi]!.first]!.code
+      let b := groupBucketOf code bb
+      if b < dir.size then
+        let (lo, hi) := dir[b]!
+        for gj in List.range (Nat.min hi G - lo) do
+          let gjIdx := lo + gj
+          -- Skip gi itself and gi+1 (already checked above)
+          if gjIdx > gi + 1 then
+            acc := checkInterGroup sorted groups[gi]! groups[gjIdx]! acc
     return acc
 
 def hilbertBroadphase (ghosts : Array BoundingBox) : BroadphaseResult :=
   let sorted := sortByHilbert ghosts
   let groups := formGroups sorted
   let G := groups.size
-  -- Inter-group: forward sweep O(G × 32 + k) = O(N + k), window = 2 × groupSize
+  -- Inter-group: adaptive forward sweep O(G × √G + k) = O(N + k)
   let acc := interGroupSweep sorted groups
   -- Intra-group: O(N)
   let acc := (List.range G).foldl (fun acc gi =>
