@@ -143,7 +143,11 @@ def formGroups (sorted : Array HilbertEntry) (maxGroupSize : Nat := 32) : Array 
       i := j + 1
     return groups
 
--- ── Steps 4-5: Overlap-adaptive scan ─────────────────────────────────────────
+-- ── Steps 4-5: Forward-sweep inter-group scan ────────────────────────────────
+-- For each group gi check only groups gj ∈ [gi+1, gi+window].
+-- Groups further ahead in Hilbert order are in distinct spatial cells whose
+-- separation exceeds the AOI diameter (c.f. aoiBand_width_bound), so their
+-- AABBs cannot overlap.  Complexity: O(G × window + k) = O(N + k).
 
 private structure BPAccum where
   pairs   : Array (Nat × Nat) := #[]
@@ -179,16 +183,26 @@ private def checkIntraGroup (sorted : Array HilbertEntry) (g : HilbertGroup) (ac
         else acc2
       else acc2) acc1) acc
 
+/-- Inter-group sweep: gi × [gi+1 … gi+window].  O(G × window + k) = O(N + k). -/
+private def interGroupSweep (sorted : Array HilbertEntry) (groups : Array HilbertGroup)
+    (window : Nat := 16) : BPAccum :=
+  let G := groups.size
+  Id.run do
+    let mut acc : BPAccum := {}
+    for gi in List.range G do
+      let winEnd := Nat.min G (gi + window + 1)
+      -- dj = 0 … (winEnd - gi - 2), gj = gi + 1 + dj
+      for dj in List.range (winEnd - (gi + 1)) do
+        acc := checkInterGroup sorted groups[gi]! groups[gi + 1 + dj]! acc
+    return acc
+
 def hilbertBroadphase (ghosts : Array BoundingBox) : BroadphaseResult :=
   let sorted := sortByHilbert ghosts
   let groups := formGroups sorted
   let G := groups.size
-  -- Inter-group pairs
-  let acc := (List.range G).foldl (fun acc gi =>
-    (List.range G).foldl (fun acc gj =>
-      if gi < gj then checkInterGroup sorted groups[gi]! groups[gj]! acc
-      else acc) acc) {}
-  -- Intra-group pairs
+  -- Inter-group: forward sweep O(G × 16 + k) = O(N + k)
+  let acc := interGroupSweep sorted groups
+  -- Intra-group: O(N)
   let acc := (List.range G).foldl (fun acc gi =>
     checkIntraGroup sorted groups[gi]! acc) acc
   -- No dedup needed: inter-group uses gi<gj, intra-group uses ii<jj,
