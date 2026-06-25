@@ -3,7 +3,7 @@
 
 import Shared.Types
 import PredictiveBvh.core.LowerBound
-import PredictiveBvh.core.BucketBound
+import PredictiveBvh.core.BucketDir
 
 -- ============================================================================
 -- OVERLAP-ADAPTIVE HILBERT BROADPHASE
@@ -182,33 +182,13 @@ def formGroups (sorted : Array HilbertEntry) (maxGroupSize : Nat := 8) : Array H
 -- Replaces the previous adaptive-window forward scan (O(G × 3√G) = O(N^1.5/const)).
 -- At N=5000 (G≈625): 75 → 32 candidates per group = 2.3× fewer inter-group checks.
 
--- Inline bucket-directory helpers (BucketDir imports HilbertBroadphase, so we
--- cannot import BucketDir here; we replicate only the two primitives we need).
-
-/-- Top-`bb` bits of a 30-bit Hilbert code → bucket index. -/
-private def groupBucketOf (code : Nat) (bb : Nat) : Nat :=
-  code >>> (30 - bb)
-
-/-- Build a bucket directory (array of (lo, hi) windows into group indices)
-    keyed by the top `bb` bits of each group's representative Hilbert code.
-    Mirrors BucketDir.buildBucketDir — see that file for the formal proof. -/
 private def buildGroupDir (sorted : Array HilbertEntry) (groups : Array HilbertGroup)
     : Array (Nat × Nat) :=
   let G := groups.size
-  if G == 0 then #[]
-  else
-    let bb := PredictiveBVH.BucketBound.bucketBitsFor G
-    let numBuckets := 1 <<< bb
-    -- Single pass: find first and last group index in each bucket
-    Id.run do
-      let mut dir : Array (Nat × Nat) := Array.replicate numBuckets (G, 0)
-      for gi in List.range G do
-        let code := sorted[groups[gi]!.first]!.code
-        let b := groupBucketOf code bb
-        if b < numBuckets then
-          let (lo, hi) := dir[b]!
-          dir := dir.set! b (Nat.min lo gi, Nat.max hi (gi + 1))
-      return dir
+  let bb := PredictiveBVH.BucketBound.bucketBitsFor G
+  let leaves : PredictiveBVH.BucketDir.SortedLeaves := Array.range G
+  PredictiveBVH.BucketDir.buildBucketDir leaves
+    (fun gi => sorted[groups[gi]!.first]!.code) bb
 
 private structure BPAccum where
   pairs   : Array (Nat × Nat) := #[]
@@ -260,7 +240,7 @@ private def interGroupSweep (sorted : Array HilbertEntry) (groups : Array Hilber
         acc := checkInterGroup sorted groups[gi]! groups[gi + 1]! acc
       -- Bucket lookup: find all groups sharing gi's Hilbert prefix bucket
       let code := sorted[groups[gi]!.first]!.code
-      let b := groupBucketOf code bb
+      let b := PredictiveBVH.BucketDir.bucketOf code bb
       if b < dir.size then
         let (lo, hi) := dir[b]!
         for gj in List.range (Nat.min hi G - lo) do
