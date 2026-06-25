@@ -12,15 +12,26 @@ import PredictiveBvh.core.LowerBound
 --
 -- Algorithm:
 --   1. Compute scene AABB (union of all ghost AABBs)
---   2. Hilbert-code each AABB centroid, sort by code
---   3. Form groups by Hilbert prefix (greedy, max 32 per group)
---   4. Inter-group: skip pairs where group AABBs are disjoint
---   5. Intra-group: check all pairs within each group
+--   2. Hilbert-code each AABB centroid, sort by code   — O(N) radix sort
+--   3. Form groups by Hilbert prefix (greedy, max 16)  — O(N)
+--   4. Inter-group forward sweep (window 32)           — O(N + k)
+--   5. Intra-group: check all C(16,2)=120 pairs        — O(N)
 --   6. Report overlapping pairs
 --
+-- Constant factor (per tick):
+--   radix(3N) + groups(N) + inter(N/16×32=2N) + intra(N/16×120=7.5N) + k
+--   ≈ 13.5N + k   [was 20.5N + k with maxGroupSize=32]
+--   → supports ~52 % more concurrent players per tick budget
+--
+-- Zone partition (authority/interest fanout):
+--   partitionByZone divides sorted entries into 2^zoneBits zones by Hilbert
+--   code prefix.  Each zone can run an independent hilbertBroadphase
+--   (authority) and exchange cross-zone interest pairs via interestEntries.
+--   Future: map each zone to a separate core or server for linear scale-out.
+--
 -- Proved:
---   - prune_sound: non-overlapping group AABBs → no entity overlap
---   - group_aabb_contains: group AABB ⊇ each member AABB
+--   - hilbert_prune_sound: non-overlapping group AABBs → no entity overlap
+--   - aabbOverlapsDec_false_implies_disjoint
 -- ============================================================================
 
 -- ── Data structures ──────────────────────────────────────────────────────────
@@ -119,7 +130,7 @@ private def groupUnion (sorted : Array HilbertEntry) (first last : Nat) : Boundi
   (List.range (last - first)).foldl (fun acc j =>
     unionBounds acc (sorted[first + j + 1]!).ghost) init
 
-def formGroups (sorted : Array HilbertEntry) (maxGroupSize : Nat := 32) : Array HilbertGroup :=
+def formGroups (sorted : Array HilbertEntry) (maxGroupSize : Nat := 16) : Array HilbertGroup :=
   let n := sorted.size
   if n == 0 then #[]
   else Id.run do
@@ -183,9 +194,10 @@ private def checkIntraGroup (sorted : Array HilbertEntry) (g : HilbertGroup) (ac
         else acc2
       else acc2) acc1) acc
 
-/-- Inter-group sweep: gi × [gi+1 … gi+window].  O(G × window + k) = O(N + k). -/
+/-- Inter-group sweep: gi × [gi+1 … gi+window].  O(G × window + k) = O(N + k).
+    Default window = 2 × maxGroupSize so coverage scales with group density. -/
 private def interGroupSweep (sorted : Array HilbertEntry) (groups : Array HilbertGroup)
-    (window : Nat := 16) : BPAccum :=
+    (window : Nat := 32) : BPAccum :=
   let G := groups.size
   Id.run do
     let mut acc : BPAccum := {}
@@ -200,7 +212,7 @@ def hilbertBroadphase (ghosts : Array BoundingBox) : BroadphaseResult :=
   let sorted := sortByHilbert ghosts
   let groups := formGroups sorted
   let G := groups.size
-  -- Inter-group: forward sweep O(G × 16 + k) = O(N + k)
+  -- Inter-group: forward sweep O(G × 32 + k) = O(N + k), window = 2 × groupSize
   let acc := interGroupSweep sorted groups
   -- Intra-group: O(N)
   let acc := (List.range G).foldl (fun acc gi =>
@@ -230,6 +242,55 @@ def bruteForceOverlap (ghosts : Array BoundingBox) : Array (Nat × Nat) :=
 def validateHilbertVsBrute (result : BroadphaseResult) (brute : Array (Nat × Nat)) : Nat :=
   brute.foldl (fun misses p =>
     if result.pairs.contains p then misses else misses + 1) 0
+
+-- ── Zone-based authority / interest partition ─────────────────────────────────
+-- Divides sorted entries by the top `zoneBits` bits of their 30-bit Hilbert
+-- code into 2^zoneBits zones.  Each zone is an independent broadphase unit
+-- (authority).  A zone's interest set expands by `interestRadius` zones on
+-- each side to capture players near zone boundaries.
+--
+-- Complexity:
+--   partitionByZone : O(N)          — single pass, stable
+--   authorityEntries: O(1)          — index lookup
+--   interestEntries : O(interestRadius × N/numZones) — bounded slice concat
+--
+-- Scale-out path:
+--   Run hilbertBroadphase on each zone's interestEntries independently.
+--   Each zone → separate core or server; cross-zone pairs handled by the
+--   authority fanout (only authority-zone players *send*; interest-zone
+--   players *receive*).
+
+structure ZonePartition where
+  zoneBits : Nat
+  zones    : Array (Array HilbertEntry)
+
+/-- Partition sorted entries into 2^zoneBits zones by Hilbert code prefix. -/
+def partitionByZone (sorted : Array HilbertEntry) (zoneBits : Nat := 6) : ZonePartition :=
+  let numZones := 1 <<< zoneBits
+  let shift    := 30 - zoneBits
+  Id.run do
+    let mut zones : Array (Array HilbertEntry) := Array.replicate numZones #[]
+    for e in sorted do
+      let z := (e.code >>> shift) % numZones
+      zones := zones.set! z (zones[z]!.push e)
+    return { zoneBits, zones }
+
+/-- Entries whose Hilbert prefix belongs to zone z (the authority set). -/
+def authorityEntries (zp : ZonePartition) (z : Nat) : Array HilbertEntry :=
+  if z < zp.zones.size then zp.zones[z]! else #[]
+
+/-- Entries from zones [z−r … z+r] (clamped): the interest set for zone z.
+    `interestRadius` must cover max spatial separation across a zone boundary
+    (i.e., ≥ AOI_radius / zone_spatial_extent). -/
+def interestEntries (zp : ZonePartition) (z : Nat) (interestRadius : Nat := 1) : Array HilbertEntry :=
+  let numZones := zp.zones.size
+  let lo := if z ≥ interestRadius then z - interestRadius else 0
+  let hi := Nat.min numZones (z + interestRadius + 1)
+  Id.run do
+    let mut acc : Array HilbertEntry := #[]
+    for dz in List.range (hi - lo) do
+      acc := acc ++ zp.zones[lo + dz]!
+    return acc
 
 -- ============================================================================
 -- PROOFS
