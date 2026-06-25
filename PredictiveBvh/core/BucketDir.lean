@@ -19,7 +19,6 @@
 --      matches the query's bucket; no leaves with a different prefix are returned.
 
 import PredictiveBvh.core.BucketBound
-import PredictiveBvh.core.HilbertBroadphase
 
 namespace PredictiveBVH
 namespace BucketDir
