@@ -1,6 +1,7 @@
 -- SPDX-License-Identifier: MIT
 -- Copyright (c) 2026-present K. S. Ernest (iFire) Lee
 
+import Mathlib.Data.Nat.ModEq
 import Shared.Types
 import PredictiveBvh.core.Formula
 import PredictiveBvh.core.HilbertCell
@@ -68,11 +69,19 @@ inductive Body where
   | nonPhysical (ident : Nat)
   deriving Repr
 
-/-- Two coprime strides, so the lattice repeats every 103 * 109 rather than every 103. -/
-def spreadX (ident : Nat) : Int := um ((ident * 37) % 103 - 51)
+/-- The X residue. A stride coprime to its modulus, so consecutive ids do not land together. -/
+def residX (ident : Nat) : Nat := (ident * 37) % 103
 
-/-- The other axis, with a modulus coprime to the first. -/
-def spreadZ (ident : Nat) : Int := um ((ident * 23) % 109 - 54)
+/-- The Z residue, against a modulus coprime to X's. That second coprimality is what makes the
+    lattice period the product rather than the smaller modulus. -/
+def residZ (ident : Nat) : Nat := (ident * 23) % 109
+
+/-- How many entities the lattice separates before it repeats. -/
+def period : Nat := 103 * 109
+
+def spreadX (ident : Nat) : Int := um ((residX ident : Int) - 51)
+
+def spreadZ (ident : Nat) : Int := um ((residZ ident : Int) - 54)
 
 /-- Where an entity is. Total: this is the file's claim, and it is a claim about the type
     rather than a theorem about a partial function. -/
@@ -86,6 +95,50 @@ theorem nonPhysical_on_segment (ident : Nat) :
 
 /-- A physical entity keeps the position it had. Reserving the segment moves nobody. -/
 theorem physical_unmoved (p : Vec3) : place (.physical p) = p := rfl
+
+-- ── The segment separates what it holds ──────────────────────────────────────
+
+/-- `um` is injective, so a place determines its residues. -/
+private theorem um_inj {a b : Int} (h : um a = um b) : a = b := by
+  unfold um at h; omega
+
+/-- **The lattice bound.** Distinct ids below the period get distinct places.
+    This is the property the two moduli exist for. Without it every non-physical entity could
+    share one point, and a broadphase cannot separate a point from itself: one query touching
+    it returns all of them, which is the interest filter failing open.
+
+    The argument is the Chinese remainder theorem run backwards. `37` is coprime to `103`, so
+    the X residue determines `ident` mod 103; `23` is coprime to `109`, so the Z residue
+    determines it mod 109; and 103 and 109 are coprime, so together they determine it mod
+    their product. Below that product, determined mod it means equal. -/
+theorem place_injective_below_period {i j : Nat} (hi : i < period) (hj : j < period)
+    (h : place (.nonPhysical i) = place (.nonPhysical j)) : i = j := by
+  have hx : residX i = residX j := by
+    have := um_inj (congrArg Vec3.x h); unfold residX at *; omega
+  have hz : residZ i = residZ j := by
+    have := um_inj (congrArg Vec3.z h); unfold residZ at *; omega
+  have hx' : 37 * i ≡ 37 * j [MOD 103] := by
+    unfold residX at hx; simp only [Nat.ModEq, Nat.mul_comm]; omega
+  have hz' : 23 * i ≡ 23 * j [MOD 109] := by
+    unfold residZ at hz; simp only [Nat.ModEq, Nat.mul_comm]; omega
+  have h103 : i ≡ j [MOD 103] := Nat.ModEq.cancel_left_of_coprime (by decide) hx'
+  have h109 : i ≡ j [MOD 109] := Nat.ModEq.cancel_left_of_coprime (by decide) hz'
+  have hmul : i ≡ j [MOD 103 * 109] :=
+    (Nat.modEq_and_modEq_iff_modEq_mul (by decide)).mp ⟨h103, h109⟩
+  unfold period at hi hj
+  rw [Nat.ModEq, Nat.mod_eq_of_lt hi, Nat.mod_eq_of_lt hj] at hmul
+  exact hmul
+
+/-- The period is 11227, and it is tight: the next id after it lands back on the first place.
+    A bound that is never reached is a bound nobody has to believe, so this says where it is. -/
+theorem period_eq : period = 11227 := by native_decide
+
+theorem period_is_tight : place (.nonPhysical 0) = place (.nonPhysical period) := by
+  native_decide
+
+/-- And it covers what the tenant needs: `fabric-store-domain` names at most `MAX_WARDS`
+    wards of `SPARKS_PER_WARD`, which is 8 * 1384. The lattice separates every one of them. -/
+theorem period_covers_a_shard : 8 * 1384 ≤ period := by native_decide
 
 -- ── The segment is out of reach ──────────────────────────────────────────────
 
