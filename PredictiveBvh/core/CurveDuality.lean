@@ -15,9 +15,14 @@
 -- makes stage k a spatial translation instead of an arbitrary jump.
 --
 -- Hilbert is NOT linear. Each level applies a rotation chosen by the prefix, so
--- bit k has no fixed spatial meaning. What it buys instead is contiguity: h and
--- h+1 are always adjacent cells, which is what makes a Hilbert code PREFIX a
--- compact region — the property zone partitioning and bucket ranges are built on.
+-- bit k has no fixed spatial meaning. What it buys instead is locality on QUERY
+-- WINDOWS: an interest query or a broadphase bucket costs fewer disjoint code
+-- ranges under Hilbert than under Morton.
+--
+-- It does NOT buy better zone partitioning, which the first draft of this file
+-- claimed. Cutting the code space into equal contiguous ranges — exactly how
+-- `Fabric.lean` assigns entities by prefix — gives Morton and Hilbert the SAME
+-- seam cost at every zone count. `seam_cost_ties` below is the correction.
 --
 -- Neither is the other's dual. (Z/2)^n is Pontryagin SELF-dual, so the linear
 -- structure Morton lives in is its own dual — which is why a butterfly can be
@@ -137,6 +142,87 @@ def worstWindow (f : Nat → Nat → Nat) : Nat :=
   ((List.range 14).flatMap fun x0 => (List.range 14).map fun y0 => clusters f 3 x0 y0).foldl max 0
 
 theorem worst_window_counts : worstWindow (hilbert2 4) = 4 ∧ worstWindow (morton2 4) = 5 := by
+  native_decide
+
+-- ============================================================================
+-- HALF THREE: WHAT THE QUERY METRIC ABOVE DOES NOT DECIDE
+--
+-- Cluster count answers "what does a query cost". It does not answer "what does
+-- a zone split cost", and reading it as though it did is how the first draft of
+-- this file reached a wrong conclusion about why Hilbert is here.
+--
+-- The partition metric is the boundary between zones when the code space is cut
+-- into equal contiguous ranges. Every boundary edge is a ghost to replicate and
+-- a staging migration when something crosses it, so it is the seam bill.
+-- ============================================================================
+
+/-- Source bit `b` of `(x, y)`: bits `0..order-1` are x, `order..2*order-1` are y. -/
+def bitOf (order x y b : Nat) : Nat :=
+  if b < order then (x >>> b) &&& 1 else (y >>> (b - order)) &&& 1
+
+/-- A bit permutation as a curve: code bit `i` takes source bit `p[i]`. Every such
+    map is an invertible GF(2) matrix, so all of them are linear and all of them
+    are butterfly-routable. Morton is one member of this family, not the family. -/
+def permCode (order : Nat) (p : List Nat) (x y : Nat) : Nat :=
+  (p.zipIdx).foldl (fun acc (b, i) => acc ||| ((bitOf order x y b) <<< i)) 0
+
+def mortonPerm (order : Nat) : List Nat := (List.range order).flatMap (fun i => [i, order + i])
+def rowMajorPerm (order : Nat) : List Nat := List.range (2 * order)
+
+/-- Boundary edges between zones when the code space is cut into `zones` equal
+    contiguous ranges. This is what `Fabric.lean`'s prefix assignment produces. -/
+def seamCost (order zones : Nat) (f : Nat → Nat → Nat) : Nat :=
+  let n := 1 <<< order
+  let per := (n * n) / zones
+  let z := fun x y => (f x y) / per
+  (((List.range (n - 1)).flatMap fun x => (List.range n).map fun y =>
+      if z x y != z (x + 1) y then 1 else 0)
+   ++ ((List.range n).flatMap fun x => (List.range (n - 1)).map fun y =>
+      if z x y != z x (y + 1) then 1 else 0)).sum
+
+/-- THE CORRECTION. Morton and Hilbert cost the same seams, at two grid sizes and
+    several zone counts. Hilbert is NOT here because its prefixes partition better;
+    they do not. It is here because query windows cost fewer ranges. -/
+theorem seam_cost_ties :
+    seamCost 3 8 (permCode 3 (mortonPerm 3)) = seamCost 3 8 (hilbert2 3) ∧
+    seamCost 4 16 (permCode 4 (mortonPerm 4)) = seamCost 4 16 (hilbert2 4) ∧
+    seamCost 4 64 (permCode 4 (mortonPerm 4)) = seamCost 4 64 (hilbert2 4) := by native_decide
+
+/-- Row-major is linear too, and it is the reason the query metric alone is a trap:
+    it beats Morton on 3x3 windows and costs 1.75x the seams to do it. -/
+theorem row_major_trades_badly :
+    totalClusters (permCode 4 (rowMajorPerm 4)) < totalClusters (morton2 4) ∧
+    seamCost 4 16 (permCode 4 (rowMajorPerm 4)) = 240 ∧
+    seamCost 4 16 (permCode 4 (mortonPerm 4)) = 96 := by native_decide
+
+/-- Morton is not optimal among linear curves — but the gap closes with order, so
+    this is a curiosity rather than a change to make.
+
+    Exhaustively over all 720 bit permutations at order 3, `xxyxyy` clusters 15%
+    better than Morton at identical seam cost. It does NOT survive to order 4:
+    the same shape costs 128 seams there against Morton's 96, so it stops
+    dominating. Over all 70 interleave patterns at order 4 the best that still
+    ties on seams is `xxyyxxyy`, and it is only 3% better.
+
+    15% -> 3% across one doubling is the useful part. Extrapolated to the 30-bit
+    codes actually used the margin is not worth a second addressing scheme, so
+    Morton stays. Recorded because "is Morton optimal" is a question that will be
+    asked again, and the answer is "no, and it does not matter". -/
+def betterThanMorton3 : List Nat := [0, 1, 3, 2, 4, 5]
+def betterThanMorton4 : List Nat := [0, 1, 4, 5, 2, 3, 6, 7]
+
+theorem better_curve_exists_at_order_3 :
+    (let c := fun p => ((List.range 6).flatMap fun a => (List.range 6).map fun b =>
+       clusters (permCode 3 p) 3 a b).sum
+     c betterThanMorton3 < c (mortonPerm 3)) ∧
+    seamCost 3 8 (permCode 3 betterThanMorton3) = seamCost 3 8 (permCode 3 (mortonPerm 3)) := by
+  native_decide
+
+/-- And the margin collapses one order up: 868 -> 840, with the seam tie held. -/
+theorem better_curve_margin_collapses :
+    totalClusters (permCode 4 betterThanMorton4) = 840 ∧
+    totalClusters (permCode 4 (mortonPerm 4)) = 868 ∧
+    seamCost 4 16 (permCode 4 betterThanMorton4) = seamCost 4 16 (permCode 4 (mortonPerm 4)) := by
   native_decide
 
 -- ============================================================================
