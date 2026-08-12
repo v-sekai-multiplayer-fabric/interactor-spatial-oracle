@@ -14,6 +14,7 @@ import PredictiveBvh.core.HilbertBroadphase
 import PredictiveBvh.core.HilbertCell
 import PredictiveBvh.core.HilbertRoundtrip
 import PredictiveBvh.core.LowerBound
+import PredictiveBvh.core.NonPhysical
 import PredictiveBvh.core.Resources
 import PredictiveBvh.core.ScaleContradictions
 import PredictiveBvh.core.ScaleProofs
