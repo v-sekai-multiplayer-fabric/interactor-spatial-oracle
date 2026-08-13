@@ -30,6 +30,13 @@
 --
 -- The theorems below are the evidence for each half, so a later reader can see
 -- that dropping one curve costs something measured rather than something felt.
+--
+-- ONE CAVEAT ABOUT WHAT `hilbert2` HERE IS. It is a correct 2D Hilbert curve, and
+-- `hilbert_clusters_better` and friends are statements about a correct curve. They
+-- were NOT statements about the deployed encoder when they were written: at that
+-- point `Shared.hilbert3D` had 87.5% non-adjacent consecutive steps and was not a
+-- Hilbert curve at all. Fixed in `lean-shared-core#2`, which is what makes the
+-- comparison below describe production rather than an ideal.
 -- ============================================================================
 
 namespace CurveDuality
