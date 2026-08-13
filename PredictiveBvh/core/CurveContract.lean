@@ -31,34 +31,43 @@ import Shared.Types
 
 namespace CurveContract
 
-/-- The pinned encoder over an `n`-cube, in code order. A Hilbert curve traverses
-    any aligned subcube contiguously, so a corner is a sound witness. -/
-def walk (n : Nat) : List (Nat × Nat × Nat) :=
-  (((List.range n).flatMap fun x => (List.range n).flatMap fun y => (List.range n).map fun z =>
-      (hilbert3D x y z, (x, y, z))).mergeSort (fun a b => a.1 ≤ b.1)).map (fun p => p.2)
+/-- Every cell of an `n`-cube. -/
+def cells (n : Nat) : List (Nat × Nat × Nat) :=
+  (List.range n).flatMap fun x => (List.range n).flatMap fun y => (List.range n).map fun z => (x, y, z)
 
-private def l1 (a b : Nat × Nat × Nat) : Nat :=
-  (max a.1 b.1 - min a.1 b.1) + (max a.2.1 b.2.1 - min a.2.1 b.2.1)
-    + (max a.2.2 b.2.2 - min a.2.2 b.2.2)
+/-- Codes whose `3*d`-bit prefix does not name their own octree cell at depth `d`.
+    This is the property a zone span IS, so it is the one worth pinning. -/
+def prefixDefects (n d : Nat) : Nat :=
+  let shift := if d ≤ 10 then 10 - d else 0
+  ((cells n).filter (fun c =>
+    let code := morton3D c.1 c.2.1 c.2.2
+    let origin := morton3D ((c.1 >>> shift) <<< shift) ((c.2.1 >>> shift) <<< shift)
+      ((c.2.2 >>> shift) <<< shift)
+    ¬ (code >>> (3 * shift) = origin >>> (3 * shift)))).length
 
-/-- Consecutive codes that are not face-adjacent. Zero for a Hilbert curve. The
-    encoder this repository shipped against scored 87.5% here. -/
-def contiguityDefects (n : Nat) : Nat :=
-  let w := walk n
-  ((w.zip w.tail).map (fun p => l1 p.1 p.2)).countP (· != 1)
+/-- THE TRIPWIRE. Not "is the dependency's test green" -- that test is not run by this
+    build -- but "does the curve we are compiled against still partition the way this
+    repository's spans assume". -/
+theorem pinned_curve_prefix_is_the_octree_cell :
+    prefixDefects 8 6 = 0 ∧ prefixDefects 8 8 = 0 ∧ prefixDefects 8 10 = 0 := by native_decide
 
-/-- THE TRIPWIRE. Not "is the dependency's test passing" — that test is not run by
-    this build — but "is the curve we are compiled against a Hilbert curve". -/
-theorem pinned_curve_is_contiguous : contiguityDefects 8 = 0 := by native_decide
+/-- Round-trip, which is necessary and by itself proves nothing -- kept deliberately, since
+    a passing round-trip is exactly what let a broken curve through here twice. -/
+theorem pinned_curve_roundtrips :
+    ((cells 8).filter (fun c =>
+      ¬ (morton3DInverse (morton3D c.1 c.2.1 c.2.2) = (c.1, c.2.1, c.2.2)))).length = 0 := by
+  native_decide
 
-/-- A canary on the exact values, because contiguity alone does not pin down which
-    Hilbert curve. Any change to the encoder — orientation, bit order, order
-    parameter — moves these, and moving them silently is the failure mode. The
-    broken encoder gave `hilbert3D 512 0 0 = 1073741823`, an edge cell handed the
-    very last index, which is the shape of the defect in one number. -/
+/-- A canary on exact values, because the properties above hold for more than one curve.
+    Any change to the encoder -- orientation, bit order, order parameter -- moves these, and
+    moving them silently is the failure mode.
+
+    These are Morton values. The previous three were a corrected Hilbert's, and the three
+    before that a broken Hilbert's; each time the change was invisible from here until this
+    theorem started failing, which is the whole reason it exists. -/
 theorem pinned_curve_values :
-    hilbert3D 0 0 0 = 0 ∧
-    hilbert3D 512 0 0 = 1011426450 ∧
-    hilbert3D 1023 1023 1023 = 766958445 := by native_decide
+    morton3D 0 0 0 = 0 ∧
+    morton3D 512 0 0 = 536870912 ∧
+    morton3D 1023 1023 1023 = 1073741823 := by native_decide
 
 end CurveContract
