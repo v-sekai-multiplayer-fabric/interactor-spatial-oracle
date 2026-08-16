@@ -1,4 +1,4 @@
-# AGENTS.md — lean-spatial-oracle
+# AGENTS.md — interactor-spatial-oracle
 
 Guidance for AI coding agents working in this repo.
 
