@@ -87,44 +87,18 @@ private def deltaCandidates : List Nat := [1, 2, 4, 8, 16, 24, 32, 48, 64, 80, 1
 private def deltaCostExpr (dk : Nat) : Expr Int :=
   .const dk * .var 0 + .const (dk * dk) * .var 1
 
--- ── Hilbert3D inverse: imperative Lean implementation ────────────────────────
--- Skilling transposeToAxes, verified by roundtrip against the forward ring
--- polynomial at build time. Algorithm: deinterleave → undo fixup → undo Gray → undo main loop.
+-- ── Code inverse ───────────────────────────────────────────────────────
+--
+-- This was a hand-written inverse of the Hilbert transpose, maintained beside a forward
+-- that lives in another repository. That is exactly how it broke once already: the
+-- forward was corrected upstream, this did not follow, and the pair round-tripped onto
+-- the wrong cell while every check here still passed.
+--
+-- It now delegates to `morton3DInverse` in `lean-shared-core`, which is the actual
+-- inverse of the actual forward. One definition, one place, nothing to keep in step by
+-- hand. If the forward changes again this cannot silently disagree with it.
 
-private def hilbert3dInverse (h : Nat) : Nat × Nat × Nat :=
-  let order := 10
-  let mask := (1 <<< order) - 1
-  -- Deinterleave: extract transpose coordinates from interleaved bits
-  -- X[0] = x is the MOST significant of each 3-bit group, so x comes off `shift + 2`.
-  -- This mirrors `hilbertTransposeToIndex`; the two emit orders must agree or the round
-  -- trip closes on the wrong cell while still closing, which is how the previous bug hid.
-  let (tx, ty, tz) := (List.range order).foldl (fun (x, y, z) bit =>
-    let b := order - 1 - bit
-    let shift := 3 * b
-    let z := z ||| (((h >>> shift) &&& 1) <<< b)
-    let y := y ||| (((h >>> (shift + 1)) &&& 1) <<< b)
-    let x := x ||| (((h >>> (shift + 2)) &&& 1) <<< b)
-    (x &&& mask, y &&& mask, z &&& mask)) (0, 0, 0)
-  -- Undo fixup: progressive decode (z0 ^ t) to recover pre-fixup z
-  let t := (List.range (order - 1)).foldl (fun t i =>
-    let q := 1 <<< (order - 1 - i)
-    if (tz ^^^ t) &&& q != 0 then t ^^^ (q - 1) else t) 0
-  let x1 := tx ^^^ t; let y1 := ty ^^^ t; let z1 := tz ^^^ t
-  -- Undo Gray (reverse of y^=x; z^=y): z^=y first, then y^=x
-  let z2 := z1 ^^^ y1; let y2 := y1 ^^^ x1
-  -- Undo main loop: Q from 2 to MSB, and within a level the three steps run in the
-  -- REVERSE of the forward's `x-self, (x,y), (x,z)`. Each step is its own inverse, so
-  -- undoing is the same three operations back-to-front — including the x-self step,
-  -- which the forward previously omitted altogether.
-  let (x3, y3, z3) := (List.range (order - 1)).foldl (fun (x, y, z) j =>
-    let q := 1 <<< (j + 1); let p := q - 1
-    let (x, z) := if z &&& q != 0 then (x ^^^ p, z) else
-      let t := (x ^^^ z) &&& p; (x ^^^ t, z ^^^ t)
-    let (x, y) := if y &&& q != 0 then (x ^^^ p, y) else
-      let t := (x ^^^ y) &&& p; (x ^^^ t, y ^^^ t)
-    let x := if x &&& q != 0 then x ^^^ p else x
-    (x, y, z)) (x1, y2, z2)
-  (x3 &&& mask, y3 &&& mask, z3 &&& mask)
+private def codeInverse (h : Nat) : Nat × Nat × Nat := morton3DInverse h
 
 -- ── AABB overlap as ring polynomial via Z↔GF(2) bridge ──────────────────────
 -- overlaps(a, b) = Π (1 - sign_bit(dᵢ))  where:
@@ -203,7 +177,7 @@ private def refBlendEnv : VarId → Int
   | 0 => 1 | 1 => 500 | 2 => 800 | _ => 0
 private def refBlendVal : Int := evalExpr refBlendEnv (.var 1 + .var 0 * (.var 2 - .var 1))
 
-private def hilbertTestCases : List (Nat × Nat × Nat) :=
+private def codeTestCases : List (Nat × Nat × Nat) :=
   [(0, 0, 0), (1, 0, 0), (0, 1, 0), (0, 0, 1),
    (5, 3, 7), (100, 200, 300), (511, 511, 511),
    (1023, 1023, 1023), (0, 0, 1023), (1023, 0, 0)]
@@ -214,20 +188,22 @@ private def hilbertTestCases : List (Nat × Nat × Nat) :=
   IO.println s!"refGhostVal = {refGhostVal}"
   IO.println s!"refDelta8Val = {refDelta8Val}"
   IO.println s!"refBlendVal = {refBlendVal}"
-  -- Hilbert forward/inverse roundtrip soundness
+  -- Forward/inverse roundtrip soundness. This THROWS on failure. The previous
+  -- version printed the failures and let the build succeed, which is how a
+  -- mismatched pair would ship. A check that only reports is not a check.
   let mut invFailures := 0
-  for (x, y, z) in hilbertTestCases do
-    let h := hilbert3D x y z
-    let (rx, ry, rz) := hilbert3dInverse h
+  for (x, y, z) in codeTestCases do
+    let h := morton3D x y z
+    let (rx, ry, rz) := codeInverse h
     if rx != x || ry != y || rz != z then
-      IO.println s!"FAIL hilbert_inv({x},{y},{z}): h={h} got=({rx},{ry},{rz})"
+      IO.println s!"FAIL code_inv({x},{y},{z}): h={h} got=({rx},{ry},{rz})"
       invFailures := invFailures + 1
     else
-      IO.println s!"OK   hilbert_inv({x},{y},{z}) h={h} → ({rx},{ry},{rz})"
+      IO.println s!"OK   code_inv({x},{y},{z}) h={h} → ({rx},{ry},{rz})"
   if invFailures > 0 then
-    IO.println s!"HILBERT INVERSE: {invFailures} FAILURES"
+    throw (IO.userError s!"CODE INVERSE: {invFailures} roundtrip failures -- the forward and inverse are not the same curve")
   else
-    IO.println s!"HILBERT INVERSE: all {hilbertTestCases.length} cases passed"
+    IO.println s!"CODE INVERSE: all {codeTestCases.length} cases roundtrip"
 
 -- ============================================================================
 -- 7b. GF(2) E-GRAPH BUILDING BLOCKS → ORDER 10 BY TEMPLATE
